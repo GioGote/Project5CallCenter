@@ -1,7 +1,14 @@
 /*
     You can import any additional package here.
  */
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.ReentrantLock;
+
 import static java.lang.Thread.sleep;
 
 public class CallCenter {
@@ -31,6 +38,14 @@ public class CallCenter {
      */
     private static final int NUMBER_OF_THREADS = 10;
 
+    // Qs
+    private static Queue<Integer> waitQ = new LinkedList<Integer>();
+    private static Queue<Integer> dispatchQ = new LinkedList<Integer>();
+
+    // Locks
+    private static ReentrantLock waitLock = new ReentrantLock();
+    private static ReentrantLock dispatchLock = new ReentrantLock();
+
 
     /*
        The Agent class.
@@ -44,6 +59,10 @@ public class CallCenter {
         public Agent(int i) {
             ID = i;
         }
+
+        // # of customers served by agent
+        private int customersServed = 0;
+
         /*
         Your Agent implementation must call the method below
         to serve each customer.
@@ -61,6 +80,28 @@ public class CallCenter {
             }
         }
 
+        public void run() {
+            while(customersServed < CUSTOMERS_PER_AGENT) {
+                int customerID = -1;
+                if(dispatchQ.size() > 0) {
+                    dispatchLock.lock();
+                    try {
+                        if (dispatchQ.size() > 0) {
+                            customerID = dispatchQ.remove();
+                        }
+                    }
+                    finally {
+                        dispatchLock.unlock();
+                    }
+                    if(customerID != -1) {
+                        serve(customerID);
+                        this.customersServed++;
+                    }
+                }
+            }
+            // Below line is for testing
+            // System.out.println("Agent " + this.ID + " out! ^-^");
+        }
     }
 
 
@@ -68,8 +109,35 @@ public class CallCenter {
         The greeter class.
         to greet a customer.
      */
-    public static class Greeter implements Runnable{
+    public static class Greeter implements Runnable {
+        private int customersServed = 0;
 
+        public void run() {
+            while(customersServed < NUMBER_OF_CUSTOMERS) {
+                if(waitQ.size() > 0) {
+                    waitLock.lock();
+                    try {
+                        dispatchLock.lock();
+                        try {
+                            int customerID = waitQ.remove();
+                            dispatchQ.add(customerID);
+                            System.out.println(
+                                "Greeting customer " + customerID + ": " +
+                                "Your place in queue is " + dispatchQ.size() + "! :3"
+                            );
+                            this.customersServed++;
+                        } finally {
+                            dispatchLock.unlock();
+                        }
+                    }
+                    finally {
+                        waitLock.unlock();
+                    }
+                }
+            }
+            // Below line is for testing
+            // System.out.println("Greeter out ✌");
+        }
     }
 
 
@@ -87,16 +155,42 @@ public class CallCenter {
         public Customer (int i){
             ID = i;
         }
+
+        public void run() {
+            waitLock.lock();
+            try {
+                waitQ.add(ID);
+            }
+            finally {
+                waitLock.unlock();
+            }
+        }
     }
 
     /*
         Create the greeter and agents threads first, and then create the customer threads.
      */
-    public static void main(String[] args){
+    public static void main(String[] args) throws Exception {
+        // Make the random
+        Random randy = new Random();
 
-	//Insert a random sleep between 0 and 150 miliseconds after submitting every customer task,
-     // to simulate a random interval between customer arrivals.
+        // Set up the es with the greeter and the agents
+        ExecutorService es = Executors.newFixedThreadPool(10);
+        es.submit(new Greeter());
+        for(int i = 1; i <= NUMBER_OF_AGENTS; i++) {
+            es.submit(new Agent(i));
+        }
 
+	    //Insert a random sleep between 0 and 150 miliseconds after submitting every customer task,
+        // to simulate a random interval between customer arrivals.
+        // Summon the customers forth
+        for(int i = 1; i <= NUMBER_OF_CUSTOMERS; i++) {
+            es.submit(new Customer(i));
+            sleep(randy.nextInt(0, 150));
+        }
+
+        // End it!
+        es.shutdown();
     }
 
 }
