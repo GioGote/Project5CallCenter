@@ -6,7 +6,9 @@ import java.util.Queue;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static java.lang.Thread.sleep;
@@ -46,6 +48,11 @@ public class CallCenter {
     private static ReentrantLock waitLock = new ReentrantLock();
     private static ReentrantLock dispatchLock = new ReentrantLock();
 
+    // Conditions
+    private static Condition waitersWaiting = waitLock.newCondition();
+
+    // Semaphores
+    private static Semaphore dispatchSem = new Semaphore(0, true);
 
     /*
        The Agent class.
@@ -83,24 +90,27 @@ public class CallCenter {
         public void run() {
             while(customersServed < CUSTOMERS_PER_AGENT) {
                 int customerID = -1;
-                if(dispatchQ.size() > 0) {
-                    dispatchLock.lock();
-                    try {
-                        if (dispatchQ.size() > 0) {
-                            customerID = dispatchQ.remove();
-                        }
-                    }
-                    finally {
-                        dispatchLock.unlock();
-                    }
-                    if(customerID != -1) {
-                        serve(customerID);
-                        this.customersServed++;
-                    }
+                try {
+                    dispatchSem.acquire();
+                } catch(Exception error) {
+                    // nope
+                }
+
+                dispatchLock.lock();
+                try {
+                    customerID = dispatchQ.remove();
+                }
+                finally {
+                    dispatchLock.unlock();
+                }
+
+                if(customerID != -1) {
+                    serve(customerID);
+                    this.customersServed++;
                 }
             }
             // Below line is for testing
-            // System.out.println("Agent " + this.ID + " out! ^-^");
+            System.out.println("Agent " + this.ID + " out! ^-^");
         }
     }
 
@@ -114,29 +124,35 @@ public class CallCenter {
 
         public void run() {
             while(customersServed < NUMBER_OF_CUSTOMERS) {
-                if(waitQ.size() > 0) {
-                    waitLock.lock();
-                    try {
-                        dispatchLock.lock();
-                        try {
-                            int customerID = waitQ.remove();
-                            dispatchQ.add(customerID);
-                            System.out.println(
-                                "Greeting customer " + customerID + ": " +
-                                "Your place in queue is " + dispatchQ.size() + "! :3"
-                            );
-                            this.customersServed++;
-                        } finally {
-                            dispatchLock.unlock();
-                        }
+                int customerID = -1;
+                waitLock.lock();
+                try {
+                    while(waitQ.isEmpty()) {
+                        waitersWaiting.await();
                     }
-                    finally {
-                        waitLock.unlock();
-                    }
+                    customerID = waitQ.remove();
+                } catch(Exception error) {
+                    // nope
                 }
+                finally {
+                    waitLock.unlock();
+                }
+                dispatchLock.lock();
+                try {
+                    dispatchQ.add(customerID);
+                    System.out.println(
+                            "Greeting customer " + customerID + ": " + "Your place in queue is " + dispatchQ.size() + "! :3"
+                    );
+                }
+                finally {
+                    dispatchLock.unlock();
+                }
+                this.customersServed++;
+
+                dispatchSem.release();
             }
             // Below line is for testing
-            // System.out.println("Greeter out ✌");
+            System.out.println("Greeter out ✌");
         }
     }
 
@@ -160,6 +176,7 @@ public class CallCenter {
             waitLock.lock();
             try {
                 waitQ.add(ID);
+                waitersWaiting.signal();
             }
             finally {
                 waitLock.unlock();
